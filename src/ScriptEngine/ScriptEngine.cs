@@ -19,6 +19,7 @@ namespace ScriptEngine
     [BepInPlugin(GUID, "Script Engine", Version)]
     public class ScriptEngine : BaseUnityPlugin
     {
+        private static readonly string BepInExAssemblyName = Assembly.GetAssembly(typeof(TypeLoader)).GetName().Name;
         public const string GUID = "com.bepis.bepinex.scriptengine";
         public const string Version = Metadata.Version;
 
@@ -28,6 +29,9 @@ namespace ScriptEngine
 
         ConfigEntry<bool> LoadOnStart { get; set; }
         ConfigEntry<Key> ReloadKey { get; set; }
+
+        static ScriptEngine instance;
+
         bool IsKeyboardShortcutPressed(Key key)
         {
             return Keyboard.current[key].wasPressedThisFrame;
@@ -35,31 +39,90 @@ namespace ScriptEngine
 
         void Awake()
         {
+            instance = this;
+
             LoadOnStart = Config.Bind("General", "LoadOnStart", false, new ConfigDescription("Load all plugins from the scripts folder when starting the application"));
             ReloadKey = Config.Bind("General", "ReloadKey", Key.F6, new ConfigDescription("Press this key to reload all the plugins from the scripts folder"));
 
             if (LoadOnStart.Value)
+            {
+                UnloadPlugins();
                 ReloadPlugins();
+            } 
         }
 
         void Update()
         {
             if (IsKeyboardShortcutPressed(ReloadKey.Value))
+            {
+                UnloadPlugins();
                 ReloadPlugins();
+            }
         }
 
-        void ReloadPlugins()
+        private static bool HasBepinPlugins(AssemblyDefinition ass)
+        {
+            if (ass.MainModule.AssemblyReferences.All(r => r.Name != BepInExAssemblyName)
+                || ass.MainModule.GetTypeReferences().All(r => r.FullName != "BepInEx.BaseUnityPlugin"))
+            {
+                return false;
+            }
+            return true;
+        }
+
+        public static List<string> FindPluginTypes(string searchDirectory, Func<AssemblyDefinition, bool> assemblyFilter = null)
+        {
+            var result = new List<string>();
+            var SearchFolders = new List<string>() { searchDirectory }; SearchFolders.AddRange(Directory.GetDirectories(searchDirectory));
+            IEnumerable<string> dlls = SearchFolders.SelectMany(directory => Directory.GetFiles(directory, "*.dll"));
+
+            foreach (string dll in dlls)
+            {
+                //ScriptEngine.instance.Logger.LogDebug($"Trying loading {dll}");
+                try
+                {
+                    var ass = AssemblyDefinition.ReadAssembly(dll);
+                    if (!assemblyFilter?.Invoke(ass) ?? false)
+                    {
+                        //ScriptEngine.instance.Logger.LogDebug($"Filter not matching. Disposing {dll}");
+                        ass.Dispose();
+                        continue;
+                    }
+                    //ScriptEngine.instance.Logger.LogDebug($"Filter matching. Adding {dll}");
+                    result.Add(dll);
+                    ass.Dispose();
+                }
+                catch (BadImageFormatException e)
+                {
+                    //ScriptEngine.instance.Logger.LogDebug($"Skipping loading {dll} because it's not a valid .NET assembly. Full error: {e.Message}");
+                }
+                catch (Exception e)
+                {
+                    //ScriptEngine.instance.Logger.LogError(e.ToString());
+                }
+            }
+            return result;
+        }
+
+
+        void UnloadPlugins()
         {
             Logger.Log(LogLevel.Info, "Unloading old plugin instances");
             Destroy(scriptManager);
             scriptManager = new GameObject($"ScriptEngine_{DateTime.Now.Ticks}");
             DontDestroyOnLoad(scriptManager);
-
-            var files = Directory.GetFiles(ScriptDirectory, "*.dll");
-            if (files.Length > 0)
+        }
+        void ReloadPlugins()
+        {
+            Logger.Log(LogLevel.Info, "Looking for plugins in " + ScriptDirectory);
+            var files = FindPluginTypes(ScriptDirectory, HasBepinPlugins); //Directory.GetFiles(ScriptDirectory, "*.dll");
+            //Logger.Log(LogLevel.Info, $"Matching files: {files.Count}");
+            if (files.Count > 0)
             {
-                foreach (string path in Directory.GetFiles(ScriptDirectory, "*.dll"))
+                foreach (string path in files)
+                {
                     LoadDLL(path, scriptManager);
+                }
 
                 Logger.LogMessage("Reloaded all plugins!");
             }
@@ -71,13 +134,14 @@ namespace ScriptEngine
 
         void LoadDLL(string path, GameObject obj)
         {
+            Logger.Log(LogLevel.Info, $"Loading plugins from {path}");
+
             var defaultResolver = new DefaultAssemblyResolver();
+            defaultResolver.AddSearchDirectory(Path.GetDirectoryName(path));
             defaultResolver.AddSearchDirectory(ScriptDirectory);
             defaultResolver.AddSearchDirectory(Paths.ManagedPath);
             defaultResolver.AddSearchDirectory(Paths.BepInExAssemblyDirectory);
-
-            Logger.Log(LogLevel.Info, $"Loading plugins from {path}");
-
+            
             using (var dll = AssemblyDefinition.ReadAssembly(path, new ReaderParameters { AssemblyResolver = defaultResolver }))
             {
                 dll.Name.Name = $"{dll.Name.Name}-{DateTime.Now.Ticks}";
