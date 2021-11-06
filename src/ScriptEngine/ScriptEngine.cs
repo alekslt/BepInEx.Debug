@@ -12,6 +12,7 @@ using System.Reflection;
 using System.Text;
 using Common;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace ScriptEngine
 {
@@ -26,12 +27,16 @@ namespace ScriptEngine
         GameObject scriptManager;
 
         ConfigEntry<bool> LoadOnStart { get; set; }
-        ConfigEntry<KeyboardShortcut> ReloadKey { get; set; }
+        ConfigEntry<Key> ReloadKey { get; set; }
+        bool IsKeyboardShortcutPressed(Key key)
+        {
+            return Keyboard.current[key].wasPressedThisFrame;
+        }
 
         void Awake()
         {
             LoadOnStart = Config.Bind("General", "LoadOnStart", false, new ConfigDescription("Load all plugins from the scripts folder when starting the application"));
-            ReloadKey = Config.Bind("General", "ReloadKey", new KeyboardShortcut(KeyCode.F6), new ConfigDescription("Press this key to reload all the plugins from the scripts folder"));
+            ReloadKey = Config.Bind("General", "ReloadKey", Key.F6, new ConfigDescription("Press this key to reload all the plugins from the scripts folder"));
 
             if (LoadOnStart.Value)
                 ReloadPlugins();
@@ -39,7 +44,7 @@ namespace ScriptEngine
 
         void Update()
         {
-            if (ReloadKey.Value.IsDown())
+            if (IsKeyboardShortcutPressed(ReloadKey.Value))
                 ReloadPlugins();
         }
 
